@@ -660,7 +660,7 @@ class App(ctk.CTk):
             return
         name = self._grp_name_entry.get().strip() or f"#{self._grp_id}"
         if not messagebox.askyesno("Gruppe löschen",
-                                   f"Gruppe „{name}" wirklich löschen?"):
+                                   f'Gruppe "{name}" wirklich loeschen?'):
             return
         try:
             db.delete_gruppe(self._grp_id)
