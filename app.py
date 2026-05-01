@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox
+from pathlib import Path
 import threading
 import datetime
 import db
@@ -91,6 +92,10 @@ class App(ctk.CTk):
         self.title("Traumkatzen")
         self.geometry("1100x700")
         self.minsize(800, 500)
+
+        icon_path = Path(__file__).parent / "cat.ico"
+        if icon_path.exists():
+            self.iconbitmap(str(icon_path))
 
         self._prefs = cfg.load()
         self._katzen: list[dict] = []
