@@ -7,6 +7,7 @@ _DEFAULTS = {
     "filter_aktiv": True,
     "filter_pausiert": True,
     "filter_vermittelt": True,
+    "backup_dir": str(Path.home() / "Documents" / "traumkatzen_backups"),
 }
 
 

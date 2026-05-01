@@ -1,5 +1,6 @@
 import pymysql
 import yaml
+import datetime
 from pathlib import Path
 
 
@@ -151,3 +152,71 @@ def save_katze(katze_id: int, data: dict) -> None:
                 ),
             )
         conn.commit()
+
+
+# ── Backup / Restore ──────────────────────────────────────────────────────────
+
+# Backup order respects FK deps; restore deletes in reverse order.
+_TABLES = ["gruppen", "katzen", "posts", "gruppen_mitglieder"]
+_DELETE_ORDER = ["gruppen_mitglieder", "posts", "katzen", "gruppen"]
+
+
+def _escape_value(v) -> str:
+    if v is None:
+        return "NULL"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return f"'{v.isoformat()}'"
+    escaped = str(v).replace("\\", "\\\\").replace("'", "\'")
+    return f"'{escaped}'"
+
+
+def backup_database(filepath: str) -> int:
+    """Writes a SQL dump to filepath. Returns total rows exported."""
+    lines = [
+        "-- Traumkatzen Backup",
+        f"-- Erstellt: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "SET FOREIGN_KEY_CHECKS=0;",
+        "SET NAMES utf8mb4;",
+        "",
+    ]
+    for table in _DELETE_ORDER:
+        lines.append(f"DELETE FROM `{table}`;")
+    lines.append("")
+
+    total = 0
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for table in _TABLES:
+                cur.execute(f"SELECT * FROM `{table}`")
+                rows = cur.fetchall()
+                if not rows:
+                    continue
+                cols = ", ".join(f"`{c}`" for c in rows[0].keys())
+                lines.append(f"-- {table}: {len(rows)} Zeilen")
+                for row in rows:
+                    vals = ", ".join(_escape_value(v) for v in row.values())
+                    lines.append(f"INSERT INTO `{table}` ({cols}) VALUES ({vals});")
+                total += len(rows)
+                lines.append("")
+
+    lines.append("SET FOREIGN_KEY_CHECKS=1;")
+    Path(filepath).write_text("\n".join(lines), encoding="utf-8")
+    return total
+
+
+def restore_database(filepath: str) -> int:
+    """Executes all SQL statements from a backup file in one transaction."""
+    executed = 0
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for line in Path(filepath).read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("--"):
+                    continue
+                cur.execute(line)
+                executed += 1
+        conn.commit()
+    return executed

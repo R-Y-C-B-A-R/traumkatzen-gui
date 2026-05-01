@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from pathlib import Path
 import threading
 import datetime
@@ -123,9 +123,11 @@ class App(ctk.CTk):
 
         tabs.add("🐱  Katzen")
         tabs.add("👥  Gruppen")
+        tabs.add("💾  Backup")
 
         self._build_katzen_tab(tabs.tab("🐱  Katzen"))
         self._build_gruppen_tab(tabs.tab("👥  Gruppen"))
+        self._build_backup_tab(tabs.tab("💾  Backup"))
 
     # ════════════════════════════════════════════════════════════════════════
     # KATZEN TAB
@@ -674,6 +676,180 @@ class App(ctk.CTk):
         self._grp_name_entry.delete(0, "end")
         self._refresh_members_display()
         self._load_gruppen()
+
+
+    # ════════════════════════════════════════════════════════════════════════
+    # BACKUP TAB
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _build_backup_tab(self, tab):
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(2, weight=1)
+
+        # ── Backup-Verzeichnis ──
+        dir_frame = ctk.CTkFrame(tab, corner_radius=8)
+        dir_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
+        dir_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(dir_frame, text="Backup-Verzeichnis",
+                     font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, padx=(12, 8), pady=10, sticky="w")
+
+        self._backup_dir_var = ctk.StringVar(value=self._prefs.get("backup_dir", ""))
+        dir_entry = ctk.CTkEntry(dir_frame, textvariable=self._backup_dir_var,
+                                 state="readonly")
+        dir_entry.grid(row=0, column=1, padx=(0, 8), pady=10, sticky="ew")
+
+        ctk.CTkButton(dir_frame, text="Ordner wählen", width=130,
+                      command=self._choose_backup_dir).grid(
+            row=0, column=2, padx=(0, 12), pady=10)
+
+        # ── Backup erstellen ──
+        action_frame = ctk.CTkFrame(tab, corner_radius=8)
+        action_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=6)
+        action_frame.grid_columnconfigure(1, weight=1)
+
+        self._backup_btn = ctk.CTkButton(action_frame, text="Backup erstellen",
+                                         width=160, command=self._create_backup)
+        self._backup_btn.grid(row=0, column=0, padx=12, pady=12)
+
+        self._backup_status = ctk.CTkLabel(action_frame, text="",
+                                           font=ctk.CTkFont(size=12))
+        self._backup_status.grid(row=0, column=1, padx=8, pady=12, sticky="w")
+
+        # ── Backup-Liste ──
+        list_frame = ctk.CTkFrame(tab, corner_radius=8)
+        list_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(6, 12))
+        list_frame.grid_columnconfigure(0, weight=1)
+        list_frame.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(list_frame, text="Vorhandene Backups",
+                     font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, padx=12, pady=(10, 4), sticky="w")
+
+        self._backup_list_frame = ctk.CTkScrollableFrame(list_frame)
+        self._backup_list_frame.grid(row=1, column=0, sticky="nsew",
+                                     padx=8, pady=(0, 8))
+        self._backup_list_frame.grid_columnconfigure(0, weight=1)
+
+        self._refresh_backup_list()
+
+    # ── Backup: actions ───────────────────────────────────────────────────────
+
+    def _choose_backup_dir(self):
+        current = self._backup_dir_var.get()
+        chosen = filedialog.askdirectory(
+            title="Backup-Verzeichnis wählen",
+            initialdir=current if Path(current).exists() else str(Path.home()),
+        )
+        if chosen:
+            self._backup_dir_var.set(chosen)
+            self._prefs["backup_dir"] = chosen
+            cfg.save(self._prefs)
+            self._refresh_backup_list()
+
+    def _create_backup(self):
+        backup_dir = Path(self._backup_dir_var.get())
+        if not backup_dir.exists():
+            try:
+                backup_dir.mkdir(parents=True)
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Verzeichnis konnte nicht erstellt werden:\n{e}")
+                return
+
+        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filepath = backup_dir / f"traumkatzen_{ts}.sql"
+
+        self._backup_btn.configure(state="disabled")
+        self._backup_status.configure(text="Erstelle Backup…")
+
+        def run():
+            try:
+                total = db.backup_database(str(filepath))
+                self.after(0, lambda: self._on_backup_done(filepath, total))
+            except Exception as e:
+                self.after(0, lambda: self._on_backup_error(str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_backup_done(self, filepath: Path, total: int):
+        self._backup_btn.configure(state="normal")
+        self._backup_status.configure(
+            text=f"Gespeichert: {filepath.name}  ({total} Zeilen)")
+        self._refresh_backup_list()
+
+    def _on_backup_error(self, error: str):
+        self._backup_btn.configure(state="normal")
+        self._backup_status.configure(text="Fehler!")
+        messagebox.showerror("Backup fehlgeschlagen", error)
+
+    def _refresh_backup_list(self):
+        for w in self._backup_list_frame.winfo_children():
+            w.destroy()
+
+        backup_dir = Path(self._backup_dir_var.get())
+        if not backup_dir.exists():
+            ctk.CTkLabel(self._backup_list_frame,
+                         text="Verzeichnis existiert noch nicht.",
+                         text_color="gray50").grid(row=0, column=0,
+                                                    padx=10, pady=8, sticky="w")
+            return
+
+        files = sorted(backup_dir.glob("traumkatzen_*.sql"), reverse=True)
+        if not files:
+            ctk.CTkLabel(self._backup_list_frame, text="Keine Backups vorhanden.",
+                         text_color="gray50").grid(row=0, column=0,
+                                                    padx=10, pady=8, sticky="w")
+            return
+
+        for i, f in enumerate(files):
+            size_kb = f.stat().st_size // 1024
+            row_f = ctk.CTkFrame(self._backup_list_frame,
+                                 fg_color=("gray85", "gray20"), corner_radius=6)
+            row_f.grid(row=i, column=0, sticky="ew", padx=4, pady=3)
+            row_f.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(row_f, text=f.name, anchor="w",
+                         font=ctk.CTkFont(family="Courier")).grid(
+                row=0, column=0, padx=10, pady=6, sticky="w")
+            ctk.CTkLabel(row_f, text=f"{size_kb} KB",
+                         text_color="gray60", width=70, anchor="e").grid(
+                row=0, column=1, padx=4)
+            ctk.CTkButton(row_f, text="Wiederherstellen", width=150,
+                          fg_color="#8B0000", hover_color="#5a0000",
+                          command=lambda p=f: self._restore_backup(p)).grid(
+                row=0, column=2, padx=(4, 8), pady=6)
+
+
+    def _restore_backup(self, filepath: Path):
+        if not messagebox.askyesno(
+            "Wiederherstellen",
+            f"Backup '{filepath.name}' wiederherstellen?\n\n"
+            "ACHTUNG: Alle aktuellen Daten werden überschrieben!",
+        ):
+            return
+
+        self._backup_status.configure(text="Stelle wieder her…")
+
+        def run():
+            try:
+                count = db.restore_database(str(filepath))
+                self.after(0, lambda: self._on_restore_done(filepath.name, count))
+            except Exception as e:
+                self.after(0, lambda: self._on_restore_error(str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_restore_done(self, filename: str, count: int):
+        self._backup_status.configure(text=f"Wiederhergestellt: {filename}")
+        messagebox.showinfo("Fertig",
+                            f"Backup erfolgreich wiederhergestellt.\n({count} Befehle ausgefuehrt)")
+        self._load_list()
+        self._load_gruppen()
+
+    def _on_restore_error(self, error: str):
+        self._backup_status.configure(text="Fehler beim Wiederherstellen!")
+        messagebox.showerror("Fehler", error)
 
 
 if __name__ == "__main__":
